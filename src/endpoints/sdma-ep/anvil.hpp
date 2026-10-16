@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -42,13 +43,15 @@ public:
 private:
   friend class xio::sdma_ep::SdmaQueueHostHandle;
 
+  void releaseResources(bool destroyQueue);
+
   int remoteDeviceId_;
   bool hostAllocated_;
-  uint64_t* cachedWptr_;    // Device-side pointer
-  uint64_t* committedWptr_; // Device-side pointer
-  void* queueBuffer_;
+  uint64_t* cachedWptr_ = nullptr;    // Device-side pointer
+  uint64_t* committedWptr_ = nullptr; // Device-side pointer
+  void* queueBuffer_ = nullptr;
   HsaQueueResource queue_;
-  SdmaQueueDeviceHandle* deviceHandle_;
+  SdmaQueueDeviceHandle* deviceHandle_ = nullptr;
 
   // Host-side state
   std::atomic<uint64_t> hostCachedWptr_;
@@ -153,7 +156,9 @@ private:
     host_sdma_channels_;
   std::vector<hsa_agent_t> cpu_agents_;
   std::vector<hsa_agent_t> gpu_agents_;
-  std::vector<hsa_agent_t> hip_gpu_agents_;
+  // HIP device id -> HSA agent, resolved lazily by PCI BDF in getHsaAgent().
+  std::map<int, hsa_agent_t> hip_gpu_agents_;
+  std::mutex hip_gpu_agents_mutex_;
 };
 
 extern AnvilLib& anvil;

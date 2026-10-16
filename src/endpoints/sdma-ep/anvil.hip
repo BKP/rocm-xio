@@ -49,6 +49,17 @@ inline void checkHipError(hipError_t err, const char* msg, const char* file,
 
 #define CHECK_HIP_ERROR(cmd) checkHipError((cmd), #cmd, __FILE__, __LINE__)
 
+inline void throwOnHipError(hipError_t err, const char* msg, const char* file,
+                            int line) {
+  if (err != hipSuccess) {
+    throw std::runtime_error(std::string("HIP error at ") + file + ":" +
+                             std::to_string(line) + " - " + msg + " (" +
+                             hipGetErrorString(err) + ")");
+  }
+}
+
+#define THROW_ON_HIP_ERROR(cmd) throwOnHipError((cmd), #cmd, __FILE__, __LINE__)
+
 static bool SdmaDebugEnabled() {
   static const bool enabled = [] {
     const char* value = std::getenv("ROCM_XIO_SDMA_DEBUG");
@@ -109,7 +120,8 @@ static const std::string getBusId(int deviceId) {
   // format. Still need to allocate proper space in case PCI domain goes
   // higher.
   char busIdChar[] = "00000000:00:00.0";
-  CHECK_HIP_ERROR(hipDeviceGetPCIBusId(busIdChar, sizeof(busIdChar), deviceId));
+  THROW_ON_HIP_ERROR(
+    hipDeviceGetPCIBusId(busIdChar, sizeof(busIdChar), deviceId));
   // we need the hex in lower case format
   for (size_t i = 0; i < sizeof(busIdChar); i++) {
     busIdChar[i] = std::tolower(busIdChar[i]);
@@ -262,86 +274,101 @@ SdmaQueue::SdmaQueue(int localDeviceId, int remoteDeviceId,
                          "Failed");
   }
 
-  // Create SDMA Queue
-  std::memset(&queue_, 0, sizeof(HsaQueueResource));
+  // The destructor does not run if the constructor throws, so release
+  // everything acquired so far before propagating.
+  bool queueCreated = false;
+  try {
+    // Create SDMA Queue
+    std::memset(&queue_, 0, sizeof(HsaQueueResource));
 
-  if (SdmaDebugEnabled()) {
-    std::cout << "SDMA_DEBUG create_queue" << " localDevice=" << localDeviceId
-              << " remoteDevice=" << remoteDeviceId
-              << " hostQueue=" << (allocateOnHost ? 1 : 0)
-              << " localNodeId=" << localNodeId << " engineId=" << engineId
-              << std::endl;
-  }
-  HSAKMT_STATUS createStatus = hsaKmtCreateQueueExt(
-    localNodeId, HSA_QUEUE_SDMA_BY_ENG_ID, DEFAULT_QUEUE_PERCENTAGE,
-    DEFAULT_PRIORITY, engineId, queueBuffer_, xio::sdma_ep::SDMA_QUEUE_SIZE,
-    nullptr, &queue_);
-  if (SdmaDebugEnabled()) {
-    std::cout << "SDMA_DEBUG create_queue_status=" << createStatus << std::endl;
-  }
-  if (createStatus != HSAKMT_STATUS_SUCCESS) {
-    throw std::runtime_error("Failed to create SDMA queue (HSAKMT status " +
-                             std::to_string(createStatus) + ")");
-  }
-
-  // Initialize host-side state (always needed)
-  uint64_t initial_wptr = *queue_.Queue_write_ptr_aql;
-  hostCachedWptr_.store(initial_wptr, std::memory_order_relaxed);
-  hostCommittedWptr_.store(initial_wptr, std::memory_order_relaxed);
-  hostCachedHwReadIndex_ = *queue_.Queue_read_ptr_aql;
-
-  if (allocateOnHost) {
-    // Host-only queue: Skip device-side structures
-    cachedWptr_ = nullptr;
-    committedWptr_ = nullptr;
-    deviceHandle_ = nullptr;
-  } else {
-    // Device queue: Allocate device-side structures for GPU kernel access
-    {
-      hsa_status_t s;
-      s = xio::allocDeviceMemory(sizeof(SdmaQueueDeviceHandle),
-                                 (void**)&deviceHandle_, "SDMA queue handle",
-                                 XIO_DEVICE_MEM_HIP);
-      if (s != HSA_STATUS_SUCCESS)
-        throw std::runtime_error("allocDeviceMemory(deviceHandle_) failed");
-      s = xio::allocDeviceMemory(sizeof(uint64_t), (void**)&cachedWptr_,
-                                 "SDMA cached wptr", XIO_DEVICE_MEM_UNCACHED);
-      if (s != HSA_STATUS_SUCCESS)
-        throw std::runtime_error("allocDeviceMemory(cachedWptr_) failed");
-      s = xio::allocDeviceMemory(sizeof(uint64_t), (void**)&committedWptr_,
-                                 "SDMA committed wptr",
-                                 XIO_DEVICE_MEM_UNCACHED);
-      if (s != HSA_STATUS_SUCCESS)
-        throw std::runtime_error("allocDeviceMemory(committedWptr_) failed");
+    if (SdmaDebugEnabled()) {
+      std::cout << "SDMA_DEBUG create_queue" << " localDevice=" << localDeviceId
+                << " remoteDevice=" << remoteDeviceId
+                << " hostQueue=" << (allocateOnHost ? 1 : 0)
+                << " localNodeId=" << localNodeId << " engineId=" << engineId
+                << std::endl;
     }
+    HSAKMT_STATUS createStatus = hsaKmtCreateQueueExt(
+      localNodeId, HSA_QUEUE_SDMA_BY_ENG_ID, DEFAULT_QUEUE_PERCENTAGE,
+      DEFAULT_PRIORITY, engineId, queueBuffer_, xio::sdma_ep::SDMA_QUEUE_SIZE,
+      nullptr, &queue_);
+    if (SdmaDebugEnabled()) {
+      std::cout << "SDMA_DEBUG create_queue_status=" << createStatus
+                << std::endl;
+    }
+    if (createStatus != HSAKMT_STATUS_SUCCESS) {
+      throw std::runtime_error("Failed to create SDMA queue (HSAKMT status " +
+                               std::to_string(createStatus) + ")");
+    }
+    queueCreated = true;
 
-    uint64_t cachedWptr = *reinterpret_cast<uint64_t*>(
-      queue_.Queue_write_ptr_aql);
-    uint64_t committedWptr = *reinterpret_cast<uint64_t*>(
-      queue_.Queue_write_ptr_aql);
-    SdmaQueueDeviceHandle handle = {
-      .queueBuf = static_cast<uint32_t*>(queueBuffer_),
-      .rptr = queue_.Queue_read_ptr_aql,
-      .wptr = queue_.Queue_write_ptr_aql,
-      .doorbell = queue_.Queue_DoorBell_aql,
-      .cachedWptr = cachedWptr_,
-      .committedWptr = committedWptr_,
-    };
+    // Initialize host-side state (always needed)
+    uint64_t initial_wptr = *queue_.Queue_write_ptr_aql;
+    hostCachedWptr_.store(initial_wptr, std::memory_order_relaxed);
+    hostCommittedWptr_.store(initial_wptr, std::memory_order_relaxed);
+    hostCachedHwReadIndex_ = *queue_.Queue_read_ptr_aql;
 
-    CHECK_HIP_ERROR(hipMemcpy(deviceHandle_, &handle,
-                              sizeof(SdmaQueueDeviceHandle),
-                              hipMemcpyHostToDevice));
-    CHECK_HIP_ERROR(hipMemcpy(cachedWptr_, &cachedWptr, sizeof(uint64_t),
-                              hipMemcpyHostToDevice));
-    CHECK_HIP_ERROR(hipMemcpy(committedWptr_, &committedWptr, sizeof(uint64_t),
-                              hipMemcpyHostToDevice));
+    if (allocateOnHost) {
+      // Host-only queue: Skip device-side structures
+      cachedWptr_ = nullptr;
+      committedWptr_ = nullptr;
+      deviceHandle_ = nullptr;
+    } else {
+      // Device queue: Allocate device-side structures for GPU kernel access
+      {
+        hsa_status_t s;
+        s = xio::allocDeviceMemory(sizeof(SdmaQueueDeviceHandle),
+                                   (void**)&deviceHandle_, "SDMA queue handle",
+                                   XIO_DEVICE_MEM_HIP);
+        if (s != HSA_STATUS_SUCCESS)
+          throw std::runtime_error("allocDeviceMemory(deviceHandle_) failed");
+        s = xio::allocDeviceMemory(sizeof(uint64_t), (void**)&cachedWptr_,
+                                   "SDMA cached wptr", XIO_DEVICE_MEM_UNCACHED);
+        if (s != HSA_STATUS_SUCCESS)
+          throw std::runtime_error("allocDeviceMemory(cachedWptr_) failed");
+        s = xio::allocDeviceMemory(sizeof(uint64_t), (void**)&committedWptr_,
+                                   "SDMA committed wptr",
+                                   XIO_DEVICE_MEM_UNCACHED);
+        if (s != HSA_STATUS_SUCCESS)
+          throw std::runtime_error("allocDeviceMemory(committedWptr_) failed");
+      }
+
+      uint64_t cachedWptr = *reinterpret_cast<uint64_t*>(
+        queue_.Queue_write_ptr_aql);
+      uint64_t committedWptr = *reinterpret_cast<uint64_t*>(
+        queue_.Queue_write_ptr_aql);
+      SdmaQueueDeviceHandle handle = {
+        .queueBuf = static_cast<uint32_t*>(queueBuffer_),
+        .rptr = queue_.Queue_read_ptr_aql,
+        .wptr = queue_.Queue_write_ptr_aql,
+        .doorbell = queue_.Queue_DoorBell_aql,
+        .cachedWptr = cachedWptr_,
+        .committedWptr = committedWptr_,
+      };
+
+      CHECK_HIP_ERROR(hipMemcpy(deviceHandle_, &handle,
+                                sizeof(SdmaQueueDeviceHandle),
+                                hipMemcpyHostToDevice));
+      CHECK_HIP_ERROR(hipMemcpy(cachedWptr_, &cachedWptr, sizeof(uint64_t),
+                                hipMemcpyHostToDevice));
+      CHECK_HIP_ERROR(hipMemcpy(committedWptr_, &committedWptr,
+                                sizeof(uint64_t), hipMemcpyHostToDevice));
+    }
+  } catch (...) {
+    releaseResources(queueCreated);
+    throw;
   }
 }
 
 SdmaQueue::~SdmaQueue() {
-  // TODO catch exception?
-  CHECK_HSAKMT_SUCCESS(hsaKmtDestroyQueue(queue_.QueueId),
-                       "Failed to destroy queue.");
+  releaseResources(true);
+}
+
+void SdmaQueue::releaseResources(bool destroyQueue) {
+  if (destroyQueue) {
+    CHECK_HSAKMT_SUCCESS(hsaKmtDestroyQueue(queue_.QueueId),
+                         "Failed to destroy queue.");
+  }
 
   // Only free device-side pointers if they were allocated
   if (deviceHandle_ != nullptr) {
@@ -492,49 +519,34 @@ void AnvilLib::init() {
       printf("Failure to open HSA connection: 0x%x", status);
       // return 1;
     }
-    status = hsa_iterate_agents(&rocm_hsa_gpu_agent_callback, &gpu_agents_);
-    if (status != HSA_STATUS_SUCCESS && status != HSA_STATUS_INFO_BREAK) {
-      printf("Failure to iterate HSA agents: 0x%x", status);
-      // return 1;
-    }
-
-    int hipDeviceCount = 0;
-    CHECK_HIP_ERROR(hipGetDeviceCount(&hipDeviceCount));
-    hip_gpu_agents_.clear();
-    hip_gpu_agents_.reserve(static_cast<std::size_t>(hipDeviceCount));
-    for (int deviceId = 0; deviceId < hipDeviceCount; ++deviceId) {
-      const std::string busId = getBusId(deviceId);
-      const PciAddress hipPci = parsePciAddress(busId);
-      hsa_agent_t* matchingAgent = nullptr;
-      for (hsa_agent_t& agent : gpu_agents_) {
-        if (getHsaPciAddress(agent) == hipPci) {
-          matchingAgent = &agent;
-          break;
-        }
+    const bool hsaInitialized = status == HSA_STATUS_SUCCESS;
+    try {
+      // Build into locals and commit last, so a throw (which makes call_once
+      // re-run this lambda) leaves no partial state behind.
+      std::vector<hsa_agent_t> gpuAgents;
+      std::vector<hsa_agent_t> cpuAgents;
+      status = hsa_iterate_agents(&rocm_hsa_gpu_agent_callback, &gpuAgents);
+      if (status != HSA_STATUS_SUCCESS && status != HSA_STATUS_INFO_BREAK) {
+        printf("Failure to iterate HSA agents: 0x%x", status);
+        // return 1;
       }
-      if (!matchingAgent) {
-        throw std::runtime_error("No HSA GPU agent matches HIP device " +
-                                 std::to_string(deviceId) + " PCI bus ID " +
-                                 busId);
+      status = hsa_iterate_agents(&rocm_hsa_cpu_agent_callback, &cpuAgents);
+      if (status != HSA_STATUS_SUCCESS && status != HSA_STATUS_INFO_BREAK) {
+        printf("Failure to iterate HSA agents: 0x%x", status);
+        // return 1;
       }
 
-      hip_gpu_agents_.push_back(*matchingAgent);
-      if (SdmaDebugEnabled()) {
-        uint32_t nodeId = 0;
-        CHECK_HSA_ERROR(
-          hsa_agent_get_info(*matchingAgent, HSA_AGENT_INFO_NODE, &nodeId));
-        std::cout << "SDMA_DEBUG device_map hipDevice=" << deviceId
-                  << " pci=" << busId << " kfdNode=" << nodeId << std::endl;
+      SetUpKFD();
+      gpu_agents_ = std::move(gpuAgents);
+      cpu_agents_ = std::move(cpuAgents);
+      s_kfd_opened = true;
+    } catch (...) {
+      // Balance hsa_init so a retried init() does not leak a reference.
+      if (hsaInitialized) {
+        hsa_shut_down();
       }
+      throw;
     }
-    status = hsa_iterate_agents(&rocm_hsa_cpu_agent_callback, &cpu_agents_);
-    if (status != HSA_STATUS_SUCCESS && status != HSA_STATUS_INFO_BREAK) {
-      printf("Failure to iterate HSA agents: 0x%x", status);
-      // return 1;
-    }
-
-    SetUpKFD();
-    s_kfd_opened = true;
   });
 }
 
@@ -642,10 +654,28 @@ uint32_t AnvilLib::getKfdNodeId(int deviceId) {
 }
 
 hsa_agent_t& AnvilLib::getHsaAgent(int deviceId) {
-  if (deviceId < 0 || static_cast<size_t>(deviceId) >= hip_gpu_agents_.size()) {
-    throw std::runtime_error("GPU device index has no matching HSA agent");
+  std::lock_guard<std::mutex> lock(hip_gpu_agents_mutex_);
+  auto cached = hip_gpu_agents_.find(deviceId);
+  if (cached != hip_gpu_agents_.end()) {
+    return cached->second;
   }
-  return hip_gpu_agents_[static_cast<size_t>(deviceId)];
+
+  const std::string busId = getBusId(deviceId);
+  const PciAddress hipPci = parsePciAddress(busId);
+  for (hsa_agent_t& agent : gpu_agents_) {
+    if (!(getHsaPciAddress(agent) == hipPci)) {
+      continue;
+    }
+    if (SdmaDebugEnabled()) {
+      uint32_t nodeId = 0;
+      CHECK_HSA_ERROR(hsa_agent_get_info(agent, HSA_AGENT_INFO_NODE, &nodeId));
+      std::cout << "SDMA_DEBUG device_map hipDevice=" << deviceId
+                << " pci=" << busId << " kfdNode=" << nodeId << std::endl;
+    }
+    return hip_gpu_agents_.emplace(deviceId, agent).first->second;
+  }
+  throw std::runtime_error("No HSA GPU agent matches HIP device " +
+                           std::to_string(deviceId) + " PCI bus ID " + busId);
 }
 
 uint32_t AnvilLib::getMappedSdmaEngineId(int srcDeviceId, int dstDeviceId) {
