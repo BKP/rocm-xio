@@ -73,7 +73,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
 
 NVME_CTRL="${ROCXIO_NVME_DEVICE:-/dev/nvme2}"
-NVME_BDEV="${ROCXIO_NVME_BDEV:-${NVME_CTRL}n1}"
+_ctrl_real="$(readlink -f "$NVME_CTRL" | sed 's/n[0-9]*$//')"
+NVME_BDEV="${ROCXIO_NVME_BDEV:-${_ctrl_real}n1}"
 ITERS="${STRESS_ITERS:-5}"
 CPU="${STRESS_CPU:-7}"
 QID="${STRESS_QID:-$((CPU + 1))}"
@@ -126,7 +127,7 @@ if [ "$HOLD_S" -lt "$MIN_HOLD_S" ]; then
     exit 2
 fi
 
-CTRL_NAME="$(basename "$NVME_CTRL")"
+CTRL_NAME="$(basename "$_ctrl_real")"
 PCI_BDF_FULL="$(basename "$(readlink -f "/sys/class/nvme/$CTRL_NAME/device")")"
 QCOUNT="$(cat "/sys/class/nvme/$CTRL_NAME/queue_count" 2>/dev/null || echo 0)"
 LBA_SIZE="$(lba_size "$NVME_BDEV")"

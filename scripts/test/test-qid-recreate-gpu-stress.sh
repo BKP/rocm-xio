@@ -78,7 +78,8 @@ if [ "${STRESS_USE_GPU:-0}" != "1" ]; then
 fi
 
 NVME_CTRL="${ROCXIO_NVME_DEVICE:-/dev/nvme2}"
-NVME_BDEV="${ROCXIO_NVME_BDEV:-${NVME_CTRL}n1}"
+_ctrl_real="$(readlink -f "$NVME_CTRL" | sed 's/n[0-9]*$//')"
+NVME_BDEV="${ROCXIO_NVME_BDEV:-${_ctrl_real}n1}"
 ITERS="${STRESS_ITERS:-3}"
 CPU="${STRESS_CPU:-7}"
 QID="${STRESS_QID:-$((CPU + 1))}"
@@ -109,9 +110,9 @@ if [ -z "$XIO_TESTER" ] || [ ! -x "$XIO_TESTER" ]; then
 fi
 [ -e /dev/kfd ] || { echo -e "${RED}Error: /dev/kfd absent; no GPU.${NC}"; exit 2; }
 
-CTRL_NAME="$(basename "$NVME_CTRL")"
+CTRL_NAME="$(basename "$_ctrl_real")"
 PCI_BDF_FULL="$(basename "$(readlink -f "/sys/class/nvme/$CTRL_NAME/device")")"
-BDF="$(resolve_bdf "$NVME_CTRL")"
+BDF="$(resolve_bdf "$_ctrl_real")"
 
 if command -v fio >/dev/null 2>&1; then
     HAMMER_DRIVER="fio"
