@@ -23,11 +23,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <sys/ioctl.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "../fio.h"
@@ -289,7 +289,7 @@ static int fio_rocm_xio_getevents(struct thread_data* td, unsigned int min,
   struct timespec deadline = {0, 0};
   if (t) {
     clock_gettime(CLOCK_MONOTONIC, &deadline);
-    deadline.tv_sec  += t->tv_sec;
+    deadline.tv_sec += t->tv_sec;
     deadline.tv_nsec += t->tv_nsec;
     if (deadline.tv_nsec >= 1000000000L) {
       deadline.tv_sec++;
@@ -351,8 +351,7 @@ static int fio_rocm_xio_getevents(struct thread_data* td, unsigned int min,
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
         if (now.tv_sec > deadline.tv_sec ||
-            (now.tv_sec == deadline.tv_sec &&
-             now.tv_nsec >= deadline.tv_nsec))
+            (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec))
           break; /* deadline expired — return what we have */
       }
       usleep(1);

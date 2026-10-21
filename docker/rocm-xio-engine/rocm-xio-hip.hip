@@ -20,17 +20,16 @@
  * This avoids GPU stores to host memory inside the long-running persistent
  * kernel, which stall indefinitely on gfx1201 in PASSTHROUGH mode. */
 __global__ static void rxio_prp_prefill(
-    uint64_t* __restrict__ prp_pool,
-    const uint64_t* __restrict__ page_phys_addrs,
-    uint64_t buf_dma_base,
-    uint32_t single_buf_pages,
-    uint32_t prp_pp,
-    uint32_t n_slots) {
+  uint64_t* __restrict__ prp_pool, const uint64_t* __restrict__ page_phys_addrs,
+  uint64_t buf_dma_base, uint32_t single_buf_pages, uint32_t prp_pp,
+  uint32_t n_slots) {
   uint32_t s = blockIdx.x * blockDim.x + threadIdx.x;
-  if (s >= n_slots) return;
+  if (s >= n_slots)
+    return;
   uint64_t* slot_list = prp_pool + (size_t)s * prp_pp;
   uint32_t n_entries = (single_buf_pages > 1) ? (single_buf_pages - 1) : 0;
-  if (n_entries > prp_pp) n_entries = prp_pp;
+  if (n_entries > prp_pp)
+    n_entries = prp_pp;
   if (page_phys_addrs) {
     uint32_t off = s * single_buf_pages;
     for (uint32_t i = 0; i < n_entries; i++)
@@ -323,31 +322,43 @@ extern "C" int rxio_setup(struct rxio_queue_ctx* ctx, const char* controller,
      * exactly matching the gpuKernelStateful path that is known to work. */
     void* ph = nullptr;
     herr = hipHostMalloc(&ph, ctx->prp_pool_bytes, hipHostMallocMapped);
-    if (herr != hipSuccess) return -ENOMEM;
+    if (herr != hipSuccess)
+      return -ENOMEM;
     memset(ph, 0, ctx->prp_pool_bytes);
     ctx->prp_pool_cpu = ph;
     herr = hipHostGetDevicePointer(&ctx->prp_pool_gpu, ph, 0);
-    if (herr != hipSuccess) ctx->prp_pool_gpu = ph;
+    if (herr != hipSuccess)
+      ctx->prp_pool_gpu = ph;
 
     /* Per-slot DMA address table (mirrors nvme-ep.hip page_dmas[]) */
     const uint32_t n_slots = (uint32_t)ctx->batch_cap;
     uint64_t* pdmas = nullptr;
     herr = hipHostMalloc((void**)&pdmas, sizeof(*pdmas) * n_slots,
                          hipHostMallocMapped);
-    if (herr != hipSuccess) { hipHostFree(ph); return -ENOMEM; }
+    if (herr != hipSuccess) {
+      hipHostFree(ph);
+      return -ENOMEM;
+    }
     bool dmas_ok = true;
     for (uint32_t s = 0; s < n_slots; s++) {
-      pdmas[s] = xio::getPhysAddr((uint8_t*)ph + (size_t)s * prp_pp * sizeof(uint64_t));
-      if (!pdmas[s]) { dmas_ok = false; break; }
+      pdmas[s] = xio::getPhysAddr((uint8_t*)ph +
+                                  (size_t)s * prp_pp * sizeof(uint64_t));
+      if (!pdmas[s]) {
+        dmas_ok = false;
+        break;
+      }
     }
     if (!dmas_ok) {
       fprintf(stderr, "rxio: getPhysAddr failed for PRP pool slot\n");
-      hipHostFree(pdmas); hipHostFree(ph); return -EIO;
+      hipHostFree(pdmas);
+      hipHostFree(ph);
+      return -EIO;
     }
-    ctx->prp_pool_dma      = pdmas[0];
+    ctx->prp_pool_dma = pdmas[0];
     ctx->prp_page_dmas_cpu = pdmas;
     herr = hipHostGetDevicePointer((void**)&ctx->prp_page_dmas_gpu, pdmas, 0);
-    if (herr != hipSuccess) ctx->prp_page_dmas_gpu = pdmas;
+    if (herr != hipSuccess)
+      ctx->prp_page_dmas_gpu = pdmas;
   }
 
   /* Persistent queue state for stateful kernel (2 × uint32_t) */
@@ -394,9 +405,10 @@ extern "C" int rxio_setup(struct rxio_queue_ctx* ctx, const char* controller,
   if (xfer_pages > 2 && ctx->prp_pool_gpu) {
     /* prpListPool=nullptr: PRP list is pre-populated by rxio_prp_prefill.
      * Persistent kernel sets PRP2=prpListDmaForSlot() without GPU stores.
-     * prpListPageDmas gives per-slot physical addresses for the stride lookup. */
-    ctx->buf_params_template.prpListPool     = nullptr;
-    ctx->buf_params_template.prpListPoolDma  = ctx->prp_pool_dma;
+     * prpListPageDmas gives per-slot physical addresses for the stride lookup.
+     */
+    ctx->buf_params_template.prpListPool = nullptr;
+    ctx->buf_params_template.prpListPoolDma = ctx->prp_pool_dma;
     ctx->buf_params_template.prpListPageDmas = ctx->prp_page_dmas_gpu;
     ctx->buf_params_template.prpEntriesPerCmd =
       xio::nvme_ep::prpListEntriesPerPage();
