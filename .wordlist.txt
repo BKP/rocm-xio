@@ -294,6 +294,21 @@ sudo
 Werror
 wordlist
 
+# ===== sdma-ep-bench terms =====
+MPPS
+MultiQueueGPU
+SdmaQueueState
+dstGpu
+numCommands
+numCopyCommands
+numDestinations
+numOfQueues
+numOfQueuesPerDestination
+srcGpu
+warmup
+warpsPerWG
+wgsPerQueue
+
 # ===== Miscellaneous =====
 api
 automatable

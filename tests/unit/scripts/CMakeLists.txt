@@ -109,3 +109,28 @@ xio_add_bash_unit_test(
 set_tests_properties(test-nvme-queue-layout PROPERTIES
   LABELS "unit;scripts;nvme;kernel"
   SKIP_RETURN_CODE 77)
+
+xio_add_bash_syntax_test(
+  test-script-sdma-bw-common
+  ${CMAKE_SOURCE_DIR}/examples/sdma-ep-bench/scripts/benchmark-common.sh)
+xio_add_bash_syntax_test(
+  test-script-sdma-bw-single
+  ${CMAKE_SOURCE_DIR}/examples/sdma-ep-bench/scripts/bench-bandwidth-single.sh)
+xio_add_bash_syntax_test(
+  test-script-sdma-bw-multiproducer
+  ${CMAKE_SOURCE_DIR}/examples/sdma-ep-bench/scripts/bench-bandwidth-multiproducer.sh)
+xio_add_bash_syntax_test(
+  test-script-sdma-bw-contention-singlequeue
+  ${CMAKE_SOURCE_DIR}/examples/sdma-ep-bench/scripts/bench-contention-singlequeue.sh)
+xio_add_bash_syntax_test(
+  test-script-sdma-bw-contention-multiqueue
+  ${CMAKE_SOURCE_DIR}/examples/sdma-ep-bench/scripts/bench-contention-multiqueue.sh)
+xio_add_bash_syntax_test(
+  test-script-sdma-rate
+  ${CMAKE_SOURCE_DIR}/examples/sdma-ep-bench/scripts/bench-packet-rate.sh)
+xio_add_bash_syntax_test(
+  test-script-sdma-latency
+  ${CMAKE_SOURCE_DIR}/examples/sdma-ep-bench/scripts/bench-latency.sh)
+xio_add_bash_syntax_test(
+  test-script-sdma-rate-isolated
+  ${CMAKE_SOURCE_DIR}/examples/sdma-ep-bench/scripts/bench-packet-rate-isolated.sh)
