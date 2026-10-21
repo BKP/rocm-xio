@@ -426,8 +426,7 @@ extern "C" int rxio_setup(struct rxio_queue_ctx* ctx, const char* controller,
     const uint32_t n_slots = (uint32_t)ctx->batch_cap;
     hipLaunchKernelGGL(rxio_prp_prefill, dim3(1), dim3(64), 0, ctx->stream,
                        (uint64_t*)ctx->prp_pool_gpu,
-                       ctx->data_buf.pagePhysAddrs,
-                       ctx->data_buf.dmaAddr,
+                       ctx->data_buf.pagePhysAddrs, ctx->data_buf.dmaAddr,
                        (uint32_t)(ctx->single_buf_size / NVME_PAGE_SIZE),
                        PRP_PP, n_slots);
     herr = hipStreamSynchronize(ctx->stream);
@@ -477,7 +476,7 @@ extern "C" int rxio_submit(struct rxio_queue_ctx* ctx, uint64_t lba,
   }
   if (ctx->prp_pool_gpu && ctx->buf_params_template.prpListPool) {
     uint32_t prp_pp = xio::nvme_ep::prpListEntriesPerPage();
-    bp.prpListPool    = (uint64_t*)ctx->prp_pool_gpu + (size_t)slot * prp_pp;
+    bp.prpListPool = (uint64_t*)ctx->prp_pool_gpu + (size_t)slot * prp_pp;
     bp.prpListPoolDma = ctx->prp_pool_dma + (uint64_t)slot * NVME_PAGE_SIZE;
   }
 
@@ -598,8 +597,8 @@ extern "C" int rxio_start_persistent(struct rxio_queue_ctx* ctx,
   /* Must match single_buf_size so buf_off = slot * xfer_size lands correctly.
    * Per-op lbas in the work item overrides the NVMe NLB but not buf_off. */
   io.lbasPerIo = (ctx->lba_size > 0)
-      ? (uint32_t)(ctx->single_buf_size / ctx->lba_size)
-      : 1;
+                   ? (uint32_t)(ctx->single_buf_size / ctx->lba_size)
+                   : 1;
   io.nsid = ctx->nsid;
   io.queueSize = ctx->queue_size;
   io.infiniteMode = false;

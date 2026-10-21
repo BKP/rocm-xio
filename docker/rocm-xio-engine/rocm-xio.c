@@ -250,7 +250,6 @@ static enum fio_q_status fio_rocm_xio_queue(struct thread_data* td,
       fd->ring_count++;
 
       /* Post to persistent kernel's work ring */
-              (unsigned long long)lba, lbas, slot);
       rc = rxio_post_work(fd->ctx, lba, lbas, is_write, slot);
       if (rc < 0) {
         /* Undo ring insert */
