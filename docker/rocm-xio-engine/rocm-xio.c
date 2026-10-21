@@ -23,7 +23,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
+#include <fcntl.h>
+#include <linux/fs.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #include "../fio.h"
@@ -282,7 +286,16 @@ static int fio_rocm_xio_getevents(struct thread_data* td, unsigned int min,
                                   unsigned int max, const struct timespec* t) {
   struct rxio_events* ev = td->io_ops_data;
   int found = 0;
-  (void)t;
+  struct timespec deadline = {0, 0};
+  if (t) {
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += t->tv_sec;
+    deadline.tv_nsec += t->tv_nsec;
+    if (deadline.tv_nsec >= 1000000000L) {
+      deadline.tv_sec++;
+      deadline.tv_nsec -= 1000000000L;
+    }
+  }
 
   if (!ev) {
     ev = calloc(1, sizeof(*ev));
@@ -333,8 +346,16 @@ static int fio_rocm_xio_getevents(struct thread_data* td, unsigned int min,
       }
     }
 
-    if (found < (int)min)
+    if (found < (int)min) {
+      if (t) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (now.tv_sec > deadline.tv_sec ||
+            (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec))
+          break; /* deadline expired — return what we have */
+      }
       usleep(1);
+    }
 
   } while (found < (int)min);
 
@@ -356,6 +377,21 @@ static int fio_rocm_xio_get_file_size(struct thread_data* td,
     f->real_file_size = rxio_ns_capacity_lbas(fd->ctx) * fd->lba_size;
     fio_file_set_size_known(f);
     return 0;
+  }
+  /* Engine not yet open — query size via a temporary fd to avoid EBADF
+   * from blockdev_size when f->fd is 0 (not yet opened by fio). */
+  if (f->file_name) {
+    int tmpfd = open(f->file_name, O_RDONLY);
+    if (tmpfd >= 0) {
+      unsigned long long bytes = 0;
+      if (ioctl(tmpfd, BLKGETSIZE64, &bytes) == 0 && bytes) {
+        f->real_file_size = bytes;
+        fio_file_set_size_known(f);
+        close(tmpfd);
+        return 0;
+      }
+      close(tmpfd);
+    }
   }
   return generic_get_file_size(td, f);
 }
